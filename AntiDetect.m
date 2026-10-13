@@ -71,13 +71,6 @@ static void RefreshHidden(void) {
     }
 }
 
-static BOOL IsHiddenIndex(uint32_t idx) {
-    for (uint32_t k = 0; k < g_hiddenCount; k++)
-        if (g_hiddenIdx[k] == idx) return YES;
-    return NO;
-}
-
-// 可见下标 -> 原始下标（跳过被隐藏项；找不到返回 -1）
 #pragma mark - replacement 实现（对齐 0x15efc8 / 0x15f08c / 0x15ee40）
 
 static uint32_t my_dyld_image_count(void) {
