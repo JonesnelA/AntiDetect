@@ -78,16 +78,6 @@ static BOOL IsHiddenIndex(uint32_t idx) {
 }
 
 // 可见下标 -> 原始下标（跳过被隐藏项；找不到返回 -1）
-static long MapRealIndex(long visibleIdx) {
-    long seen = -1;
-    for (uint32_t i = 0; i < g_realCount; i++) {
-        if (IsHiddenIndex(i)) continue;
-        seen++;
-        if (seen == visibleIdx) return (long)i;
-    }
-    return -1;
-}
-
 #pragma mark - replacement 实现（对齐 0x15efc8 / 0x15f08c / 0x15ee40）
 
 static uint32_t my_dyld_image_count(void) {
@@ -113,19 +103,6 @@ static const char *my_dyld_get_image_name(uint32_t idx) {
     t_in_hook = 0;
     if (adj >= g_realCount) return NULL;
     return orig_image_name ? orig_image_name(adj) : _dyld_get_image_name(adj);
-}
-
-static const struct mach_header *my_dyld_get_image_header(uint32_t idx) {
-    if (t_in_hook) return _dyld_get_image_header(idx);
-    t_in_hook = 1;
-    if (g_realCount == 0) RefreshHidden();
-    uint32_t adj = idx;
-    for (uint32_t k = 0; k < g_hiddenCount; k++) {
-        if (idx >= g_hiddenIdx[k]) adj++;
-    }
-    t_in_hook = 0;
-    if (adj >= g_realCount) return NULL;
-    return _dyld_get_image_header(adj);
 }
 
 static int my_lstat(const char *restrict path, struct stat *restrict buf) {
