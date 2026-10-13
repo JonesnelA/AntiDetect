@@ -20,7 +20,7 @@ jobs:
 
       - name: Setup Theos
         run: |
-          git clone --depth=1 https://github.com/theos/theos.git theos
+          git clone --recursive --depth=1 https://github.com/theos/theos.git theos
           echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
           # SDK（除非你已有私有 SDK 缓存，否则用默认 iPhoneOS SDK）
           curl -sL https://github.com/theos/sdks/archive/master.tar.gz | tar -xz -C theos/sdks --strip-components=1
