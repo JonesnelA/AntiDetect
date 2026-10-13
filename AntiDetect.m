@@ -73,7 +73,7 @@ static void RefreshHidden(void) {
 
 static BOOL IsHiddenIndex(uint32_t idx) {
     for (uint32_t k = 0; k < g_hiddenCount; k++)
-        if (gHiddenIdx[k] == idx) return YES;
+        if (g_hiddenIdx[k] == idx) return YES;
     return NO;
 }
 
@@ -108,7 +108,7 @@ static const char *my_dyld_get_image_name(uint32_t idx) {
     // JnZ1Hub 0x15f0f8 语义：idx >= hidden 的每个隐藏项使 idx 后移一位
     uint32_t adj = idx;
     for (uint32_t k = 0; k < g_hiddenCount; k++) {
-        if (idx >= gHiddenIdx[k]) adj++;
+        if (idx >= g_hiddenIdx[k]) adj++;
     }
     t_in_hook = 0;
     if (adj >= g_realCount) return NULL;
@@ -121,7 +121,7 @@ static const struct mach_header *my_dyld_get_image_header(uint32_t idx) {
     if (g_realCount == 0) RefreshHidden();
     uint32_t adj = idx;
     for (uint32_t k = 0; k < g_hiddenCount; k++) {
-        if (idx >= gHiddenIdx[k]) adj++;
+        if (idx >= g_hiddenIdx[k]) adj++;
     }
     t_in_hook = 0;
     if (adj >= g_realCount) return NULL;
