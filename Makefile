@@ -4,10 +4,11 @@ ARCHS = arm64
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AntiDetect
-AntiDetect_FILES = AntiDetect.x
-AntiDetect_FRAMEWORKS = Foundation UIKit
-AntiDetect_CFLAGS = -fobjc-arc
-# 非 bundle hook（Reachability 等）运行时解析，链接不做强校验
-AntiDetect_LDFLAGS = -Wl,-undefined,dynamic_lookup
+AntiDetect_FILES = AntiDetect.m fishhook-lite.c
+AntiDetect_FRAMEWORKS = Foundation UIKit CoreFoundation
+AntiDetect_CFLAGS = -fobjc-arc -Wno-unused-variable
+# 关键：禁用 chained fixups，保证 classic bind 可被 fishhook-lite 重绑定；
+# 不链接 substrate（无 Logos）
+AntiDetect_LDFLAGS = -Wl,-no_fixup_chains
 
 include $(THEOS_MAKE_PATH)/tweak.mk
