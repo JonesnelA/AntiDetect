@@ -1,202 +1,157 @@
-// AntiDetect.m —— 纯过检测层 v3（最小化，仅 ObjC swizzle，零 C 层 rebind）
+// AntiDetect.m —— v7：JnZ1Hub 隐身三件套精确复刻
 //
-// v3 依据（2026-10-13 真机定界）：
-//   v95（JnZ1Hub locked mode）在 19.7.3 不被反作弊踢 → 注入本身 + ObjC swizzle 可存活；
-//   v97（v2）被踢 → 触发点在 AntiDetect 独有行为：dyld 镜像隐藏（指纹交叉验证不一致）、
-//   stat/ptrace/sysctl 等 fishhook 重绑定（GOT 审计检出）。v3 全部撤掉，只保留
-//   JnZ1Hub 已验证能过的行为超集的最小化：
-//   E. 检测请求假响应（NSData swizzle）
-//   F. 弹窗压制（UIViewController/UIApplication swizzle）
-//   D. Reachability 恒可达（类存在才装）
+// 依据（2026-10-13 二分实测 + 逆向）：
+//   v102 改名空壳仍被踢 → "未隐身的注入 dylib 存在"即死；
+//   v95（JnZ1Hub locked）能过 → 它 locked 下就生效的隐身三件套是存活充要条件：
+//     fishhook rebind 恰好 3 个函数：lstat / _dyld_image_count / _dyld_get_image_name
+//     （逆向自 0x15ece4 rebind 表构造 / 0x15efc8 / 0x15f08c / 0x15f610 刷新），
+//     多 rebind 一个都撞 GOT 审计（v97 教训），ObjC swizzle 陪葬（v99 教训）。
+//   本文件 = 三件套 + 隐藏自身 + 中性命名，其余一律不做。
 
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
-#import <objc/runtime.h>
-#import <objc/message.h>
+#import <dlfcn.h>
+#import <mach-o/dyld.h>
+#import <mach-o/loader.h>
+#import <sys/stat.h>
+#import <sys/errno.h>
+#import <pthread.h>
 
-#pragma mark - 规则配置
+#include "fishhook-lite.h"
 
-static BOOL IsFakeResponseURL(NSURL *url) {
-    if (!url) return NO;
-    NSString *host = url.host.lowercaseString ?: @"";
-    // 证书/签名工具类查询域（通用规则，按需增删）
-    if ([host hasSuffix:@".iosastool.online"] || [host isEqualToString:@"iosastool.online"]) return YES;
-    if ([host hasSuffix:@".udid.one"] || [host isEqualToString:@"udid.one"]) return YES;
-    // TODO: 真机抓到游戏检测上报 URL 后在此追加
-    return NO;
-}
+#pragma mark - 隐藏规则（子串匹配 basename）
 
-static NSData *FakeJSONPayload(void) {
-    static NSData *payload;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        payload = [@"{\"data\":[],\"status\":\"ok\",\"msg\":\"\",\"code\":0}"
-                   dataUsingEncoding:NSUTF8StringEncoding];
-    });
-    return payload;
-}
+// 匹配这些子串的镜像会被隐藏（与 JnZ1Hub hide_substrs/artifacts 机制对齐）
+static const char *kHideSubstrs[] = {
+    "UIKitSupport",
+};
+static const int kHideSubstrCount = (int)(sizeof(kHideSubstrs) / sizeof(kHideSubstrs[0]));
 
-static NSArray<NSString *> *SuppressKeywords(void) {
-    static NSArray *arr;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        arr = @[@"描述文件", @"描述檔", @"Profile", @"profile", @"UDID", @"udid",
-                @"企业证书", @"企业级", @"Enterprise", @"未受信任", @"Untrusted"];
-    });
-    return arr;
-}
+// 越狱痕迹路径黑名单（lstat 拦截，复刻 JnZ1Hub 0x2205xx 表）
+static const char * const kJBPaths[] = {
+    "/Applications/Cydia.app", "/Applications/Sileo.app",
+    "/Applications/Zebra.app", "/Applications/Installer.app",
+    "/private/var/lib/apt", "/private/var/lib/cydia", "/private/var/stash",
+    "/var/jb", "/var/lib/apt", "/var/lib/dpkg", "/var/lib/undecimus",
+    "/private/var/lib/undecimus", "/usr/sbin/sshd", "/var/binpack",
+    "/private/var/mobile/Library/Preferences/com.saurik.Cydia.plist",
+};
+static const int kJBPathCount = (int)(sizeof(kJBPaths) / sizeof(kJBPaths[0]));
 
-static BOOL ShouldSuppressText(NSString *text) {
-    if (text.length == 0) return NO;
-    for (NSString *kw in SuppressKeywords())
-        if ([text rangeOfString:kw].location != NSNotFound) return YES;
-    return NO;
-}
+#pragma mark - 状态（bss，对齐 JnZ1Hub 0x13d4bfc/0x13d4c00/0x13d4c60 布局）
 
-static BOOL IsSystemSettingsURL(NSURL *url) {
-    NSString *scheme = url.scheme.lowercaseString ?: @"";
-    return [scheme isEqualToString:@"managedconfiguration"] ||
-           [scheme isEqualToString:@"prefs"] ||
-           [scheme isEqualToString:@"app-prefs"];
-}
+static uint32_t g_realCount;      // 真实镜像数缓存（0 = 未扫描）
+static uint32_t g_hiddenIdx[8];   // 隐藏镜像的原始下标（上限 8，同 JnZ1Hub）
+static uint32_t g_hiddenCount;
+static const char *(*orig_image_name)(uint32_t);
+static int (*orig_lstat)(const char *, struct stat *);
 
-#pragma mark - E. NSData 假响应
+static _Thread_local int t_in_hook;   // 重入保护（JnZ1Hub 用 TLV，等价实现）
 
-static NSData *(*orig_dataWithContentsOfURL)(id, SEL, NSURL *);
-static NSData *new_dataWithContentsOfURL(id self, SEL _cmd, NSURL *url) {
-    if (IsFakeResponseURL(url)) return FakeJSONPayload();
-    return orig_dataWithContentsOfURL(self, _cmd, url);
-}
+#pragma mark - 刷新：扫描镜像，登记匹配隐藏规则的原始下标
 
-static NSData *(*orig_dataWithContentsOfURL_opt)(id, SEL, NSURL *, NSDataReadingOptions, NSError **);
-static NSData *new_dataWithContentsOfURL_opt(id self, SEL _cmd, NSURL *url,
-                                             NSDataReadingOptions opts, NSError **err) {
-    if (IsFakeResponseURL(url)) { if (err) *err = nil; return FakeJSONPayload(); }
-    return orig_dataWithContentsOfURL_opt(self, _cmd, url, opts, err);
-}
+static void RefreshHidden(void) {
+    // 用 dlsym 直取真函数，绕开自身可能的 rebind
+    uint32_t (*f_count)(void) = (uint32_t (*)(void))dlsym(RTLD_DEFAULT, "_dyld_image_count");
+    const char *(*f_name)(uint32_t) = (const char *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_name");
+    if (!f_count || !f_name) return;
 
-#pragma mark - F. 弹窗压制
-
-static void (*orig_presentVC)(id, SEL, UIViewController *, BOOL, void (^)(void));
-static void new_presentVC(id self, SEL _cmd, UIViewController *vc, BOOL flag, void (^completion)(void)) {
-    @try {
-        if (vc && [vc isKindOfClass:[UIAlertController class]]) {
-            UIAlertController *ac = (UIAlertController *)vc;
-            if (ShouldSuppressText(ac.title) || ShouldSuppressText(ac.message)) {
-                if (completion) completion();
-                return;
+    g_realCount = f_count();
+    g_hiddenCount = 0;
+    for (uint32_t i = 0; i < g_realCount; i++) {
+        const char *name = f_name(i);
+        if (!name) continue;
+        const char *base = strrchr(name, '/');
+        base = base ? base + 1 : name;
+        for (int k = 0; k < kHideSubstrCount; k++) {
+            if (strstr(base, kHideSubstrs[k]) != NULL) {
+                if (g_hiddenCount < 8) g_hiddenIdx[g_hiddenCount++] = i;
+                break;
             }
         }
-    } @catch (NSException *e) { }
-    orig_presentVC(self, _cmd, vc, flag, completion);
+    }
 }
 
-static BOOL (*orig_openURL)(id, SEL, NSURL *);
-static BOOL new_openURL(id self, SEL _cmd, NSURL *url) {
-    if (IsSystemSettingsURL(url)) return NO;
-    return orig_openURL(self, _cmd, url);
+static BOOL IsHiddenIndex(uint32_t idx) {
+    for (uint32_t k = 0; k < g_hiddenCount; k++)
+        if (gHiddenIdx[k] == idx) return YES;
+    return NO;
 }
 
-static void (*orig_openURL_opt)(id, SEL, NSURL *, NSDictionary *, void (^)(BOOL));
-static void new_openURL_opt(id self, SEL _cmd, NSURL *url, NSDictionary *options,
-                            void (^completion)(BOOL)) {
-    if (IsSystemSettingsURL(url)) { if (completion) completion(NO); return; }
-    orig_openURL_opt(self, _cmd, url, options, completion);
+// 可见下标 -> 原始下标（跳过被隐藏项；找不到返回 -1）
+static long MapRealIndex(long visibleIdx) {
+    long seen = -1;
+    for (uint32_t i = 0; i < g_realCount; i++) {
+        if (IsHiddenIndex(i)) continue;
+        seen++;
+        if (seen == visibleIdx) return (long)i;
+    }
+    return -1;
+}
+
+#pragma mark - replacement 实现（对齐 0x15efc8 / 0x15f08c / 0x15ee40）
+
+static uint32_t my_dyld_image_count(void) {
+    if (t_in_hook) return g_realCount - g_hiddenCount;
+    t_in_hook = 1;
+    if (g_realCount == 0) RefreshHidden();
+    uint32_t n = g_realCount;
+    t_in_hook = 0;
+    return n - g_hiddenCount;
+}
+
+static const char *my_dyld_get_image_name(uint32_t idx) {
+    if (t_in_hook) {
+        return orig_image_name ? orig_image_name(idx) : _dyld_get_image_name(idx);
+    }
+    t_in_hook = 1;
+    if (g_realCount == 0) RefreshHidden();
+    // JnZ1Hub 0x15f0f8 语义：idx >= hidden 的每个隐藏项使 idx 后移一位
+    uint32_t adj = idx;
+    for (uint32_t k = 0; k < g_hiddenCount; k++) {
+        if (idx >= gHiddenIdx[k]) adj++;
+    }
+    t_in_hook = 0;
+    if (adj >= g_realCount) return NULL;
+    return orig_image_name ? orig_image_name(adj) : _dyld_get_image_name(adj);
+}
+
+static const struct mach_header *my_dyld_get_image_header(uint32_t idx) {
+    if (t_in_hook) return _dyld_get_image_header(idx);
+    t_in_hook = 1;
+    if (g_realCount == 0) RefreshHidden();
+    uint32_t adj = idx;
+    for (uint32_t k = 0; k < g_hiddenCount; k++) {
+        if (idx >= gHiddenIdx[k]) adj++;
+    }
+    t_in_hook = 0;
+    if (adj >= g_realCount) return NULL;
+    return _dyld_get_image_header(adj);
+}
+
+static int my_lstat(const char *restrict path, struct stat *restrict buf) {
+    if (path) {
+        for (int i = 0; i < kJBPathCount; i++) {
+            if (strcmp(path, kJBPaths[i]) == 0) { errno = ENOENT; return -1; }
+        }
+    }
+    return orig_lstat ? orig_lstat(path, buf) : lstat(path, buf);
 }
 
 #pragma mark - 安装
 
-static void SwizzleClass(Class c, SEL sel, IMP newImp, IMP *origOut) {
-    if (!c) return;
-    Method m = class_getClassMethod(c, sel);
-    if (!m) return;
-    *origOut = method_getImplementation(m);
-    method_setImplementation(m, newImp);
-}
-
-static void SwizzleInstance(Class c, SEL sel, IMP newImp, IMP *origOut) {
-    if (!c) return;
-    Method m = class_getInstanceMethod(c, sel);
-    if (!m) return;
-    *origOut = method_getImplementation(m);
-    method_setImplementation(m, newImp);
-}
-
-// flags 来源（按优先级）：
-//   1. Documents/antidetect_flags.txt（文件 App 直接可见/可编辑，已开文件共享）
-//   2. 剪贴板内容以 "antidetect:" 开头，如 antidetect:data,present
-// token：data / present / openurl。两者皆无 = 全关（空壳，纯注入验证）
-static void InstallHooks(NSSet<NSString *> *flags);
-
-static void LogFlags(NSSet<NSString *> *flags) {
-    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)
-                      firstObject];
-    NSString *logPath = [docs stringByAppendingPathComponent:@"antidetect.log"];
-    NSString *log = [NSString stringWithFormat:@"AntiDetect init flags=%@\n",
-                     flags.allObjects ?: @"(none)"];
-    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) { [log writeToFile:logPath atomically:YES encoding:NSUTF8StringEncoding error:NULL]; }
-    else { [fh seekToEndOfFile]; [fh writeData:[log dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
-}
-
-static NSSet<NSString *> *ParseTokens(NSString *text) {
-    NSMutableSet *flags = [NSMutableSet set];
-    if (!text) return flags;
-    for (NSString *line in [text componentsSeparatedByCharactersInSet:
-         [NSCharacterSet newlineCharacterSet]]) {
-        NSString *t = [line stringByTrimmingCharactersInSet:
-                       [NSCharacterSet whitespaceCharacterSet]];
-        if (t.length && ![t hasPrefix:@"#"]) [flags addObject:t];
-    }
-    return flags;
-}
-
-static NSSet<NSString *> *LoadFlags(void) {
-    NSString *docs = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)
-                      firstObject];
-    NSString *path = [docs stringByAppendingPathComponent:@"antidetect_flags.txt"];
-    NSString *text = [NSString stringWithContentsOfFile:path
-                                               encoding:NSUTF8StringEncoding
-                                                  error:NULL];
-    NSSet *flags = ParseTokens(text);
-    if (flags.count == 0) {
-        // 剪贴板通道：antidetect:data,present
-        NSString *clip = [UIPasteboard generalPasteboard].string ?: @"";
-        if ([clip hasPrefix:@"antidetect:"]) {
-            flags = ParseTokens([clip substringFromIndex:@"antidetect:".length]);
-        }
-    }
-    LogFlags(flags);
-    return flags;
-}
-
 __attribute__((constructor))
 static void AntiDetectInit(void) {
-    @autoreleasepool {
-        InstallHooks(LoadFlags());
-    }
-}
+    // 真函数指针（dlsym 直取，rebind 前保存）
+    orig_image_name = (const char *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_name");
 
-static void InstallHooks(NSSet<NSString *> *flags) {
-    if ([flags containsObject:@"data"]) {
-        Class dataCls = [NSData class];
-        SwizzleClass(dataCls, @selector(dataWithContentsOfURL:),
-                     (IMP)new_dataWithContentsOfURL, (IMP *)&orig_dataWithContentsOfURL);
-        SwizzleClass(dataCls, @selector(dataWithContentsOfURL:options:error:),
-                     (IMP)new_dataWithContentsOfURL_opt, (IMP *)&orig_dataWithContentsOfURL_opt);
-    }
+    // 首扫
+    RefreshHidden();
 
-    if ([flags containsObject:@"present"]) {
-        SwizzleInstance([UIViewController class],
-                        @selector(presentViewController:animated:completion:),
-                        (IMP)new_presentVC, (IMP *)&orig_presentVC);
-    }
-
-    if ([flags containsObject:@"openurl"]) {
-        Class appCls = objc_getClass("UIApplication");
-        SwizzleInstance(appCls, @selector(openURL:),
-                        (IMP)new_openURL, (IMP *)&orig_openURL);
-        SwizzleInstance(appCls, @selector(openURL:options:completionHandler:),
-                        (IMP)new_openURL_opt, (IMP *)&orig_openURL_opt);
-    }
+    // 精确三件套 rebind（JnZ1Hub 0x15ece4 同款，一步不多）
+    struct rebind_entry entries[] = {
+        { "lstat",                 (void *)my_lstat,                 (void **)&orig_lstat },
+        { "_dyld_image_count",     (void *)my_dyld_image_count,      NULL },
+        { "_dyld_get_image_name",  (void *)my_dyld_get_image_name,   (void **)&orig_image_name },
+    };
+    rebind_local(entries, sizeof(entries) / sizeof(entries[0]));
 }
