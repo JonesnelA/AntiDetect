@@ -19,9 +19,13 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach/mach.h>
-#import <mach/mach_vm.h>
 #import <dlfcn.h>
 #import <string.h>
+
+// theos SDK 的 mach_vm.h 是守卫头，手动声明
+extern kern_return_t mach_vm_protect(mach_port_name_t task, mach_vm_address_t address,
+                                     mach_vm_size_t size, boolean_t set_maximum,
+                                     vm_prot_t new_protection);
 
 // ---- CCCryptorGCMOneshotDecrypt 真实签名（CommonCrypto）----
 // CCCryptorStatus CCCryptorGCMOneshotDecrypt(
