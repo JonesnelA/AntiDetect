@@ -104,19 +104,6 @@ static void new_openURL_opt(id self, SEL _cmd, NSURL *url, NSDictionary *options
     orig_openURL_opt(self, _cmd, url, options, completion);
 }
 
-#pragma mark - D. Reachability 恒可达
-
-static BOOL (*orig_isReachable)(id, SEL);
-static BOOL new_isReachable(id self, SEL _cmd) { return YES; }
-static BOOL (*orig_isReachableWiFi)(id, SEL);
-static BOOL new_isReachableWiFi(id self, SEL _cmd) { return YES; }
-static BOOL (*orig_isReachableWWAN)(id, SEL);
-static BOOL new_isReachableWWAN(id self, SEL _cmd) { return YES; }
-static BOOL (*orig_connRequired)(id, SEL);
-static BOOL new_connRequired(id self, SEL _cmd) { return NO; }
-static void (*orig_startNotifier)(id, SEL);
-static void new_startNotifier(id self, SEL _cmd) { /* 吞掉 */ }
-
 #pragma mark - 安装
 
 static void SwizzleClass(Class c, SEL sel, IMP newImp, IMP *origOut) {
@@ -154,18 +141,5 @@ static void AntiDetectInit(void) {
         SwizzleInstance(appCls, @selector(openURL:options:completionHandler:),
                         (IMP)new_openURL_opt, (IMP *)&orig_openURL_opt);
 
-        Class reachCls = objc_getClass("Reachability");
-        if (reachCls) {
-            SwizzleInstance(reachCls, @selector(isReachable),
-                            (IMP)new_isReachable, (IMP *)&orig_isReachable);
-            SwizzleInstance(reachCls, @selector(isReachableViaWiFi),
-                            (IMP)new_isReachableWiFi, (IMP *)&orig_isReachableWiFi);
-            SwizzleInstance(reachCls, @selector(isReachableViaWWAN),
-                            (IMP)new_isReachableWWAN, (IMP *)&orig_isReachableWWAN);
-            SwizzleInstance(reachCls, @selector(isConnectionRequired),
-                            (IMP)new_connRequired, (IMP *)&orig_connRequired);
-            SwizzleInstance(reachCls, @selector(startNotifier),
-                            (IMP)new_startNotifier, (IMP *)&orig_startNotifier);
-        }
     }
 }
