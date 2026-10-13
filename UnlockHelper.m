@@ -19,6 +19,7 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach/mach.h>
+#import <mach/mach_vm.h>
 #import <dlfcn.h>
 #import <string.h>
 
@@ -106,7 +107,6 @@ static int RedirectGot(int64_t base, void *realFn, void *myFn) {
                         if (slot[k] == realFn) {
                             mach_vm_address_t pageAddr = ((mach_vm_address_t)(slot + k)) & ~0xFFFULL;
                             mach_vm_size_t pageSize = 0x1000;
-                            vm_prot_t cur = 0, max = 0;
                             if (mach_vm_protect(mach_task_self(), pageAddr, pageSize, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS) {
                                 slot[k] = myFn;
                                 redirected++;
