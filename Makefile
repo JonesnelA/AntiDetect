@@ -4,10 +4,9 @@ ARCHS = arm64
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AntiDetect
-AntiDetect_FILES = AntiDetect.m fishhook-lite.c
+# v3: 仅 ObjC swizzle，无 fishhook（消除 GOT 审计痕迹）
+AntiDetect_FILES = AntiDetect.m
 AntiDetect_FRAMEWORKS = Foundation UIKit CoreFoundation
-AntiDetect_CFLAGS = -fobjc-arc -Wno-unused-variable
-# 不链接 substrate（无 Logos）；工具链默认 classic bind（无 chained fixups）
-AntiDetect_LDFLAGS =
+AntiDetect_CFLAGS = -fobjc-arc
 
 include $(THEOS_MAKE_PATH)/tweak.mk
