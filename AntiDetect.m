@@ -145,7 +145,7 @@ static NSSet<NSString *> *LoadFlags(void) {
     NSString *logPath = [path stringByDeletingLastPathComponent];
     logPath = [logPath stringByAppendingPathComponent:@"antidetect.log"];
     NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
-    if (!fh) { [log writeToFile:logPath atomically:YES]; }
+    if (!fh) { [log writeToFile:logPath atomically:YES error:NULL]; }
     else { [fh seekToEndOfFile]; [fh writeData:[log dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
     return flags;
 }
