@@ -1,9 +1,7 @@
 name: Build AntiDetect
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ main, master ]
+  workflow_dispatch:   # [额度保护] 仅手动触发（Actions 页面 Run workflow 按钮）
 
 jobs:
   build:
