@@ -34,8 +34,7 @@ jobs:
       - name: Extract raw dylib
         run: |
           mkdir -p out
-          cp .theos/obj/AntiDetect.dylib out/AntiDetect.dylib 2>/dev/null || \
-          find .theos -name 'AntiDetect.dylib' -exec cp {} out/ \;
+          find .theos -name '*.dylib' -type f -exec cp {} out/ \;
           ls -la out/
 
       - name: Upload dylib
