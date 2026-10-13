@@ -242,8 +242,7 @@ static long MapRealIndex(long visibleIdx) {
     return %orig;
 }
 
-%hookf(int, sysctl, int *name, u_int namelen, void *oldp, size_t *oldlenp,
-       void *newp, size_t newlen) {
+%hookf(int, sysctl, int *name, u_int namelen, void *oldp, size_t *oldlenp, void *newp, size_t newlen) {
     int ret = %orig;
     if (ret == 0 && namelen == 4 && name[0] == CTL_KERN && name[1] == KERN_PROC) {
         // 清除 P_TRACED 标志（kinfo_proc.kp_proc.p_flag）
