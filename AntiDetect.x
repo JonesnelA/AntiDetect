@@ -16,9 +16,12 @@
 #import <UIKit/UIKit.h>
 #import <sys/stat.h>
 #import <sys/sysctl.h>
+#import <sys/ptrace.h>
+#import <sys/proc.h>
 #import <sys/errno.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
+#import <mach-o/loader.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -125,13 +128,29 @@ static BOOL ShouldSuppressText(NSString *text) {
 static int gHiddenCount = 0;   // 需要隐藏的镜像数
 static NSMutableArray<NSNumber *> *gHiddenIdx; // 隐藏镜像的原始下标
 
+// 真函数指针（dlsym 直取，绕开自身 hook，避免递归/计数错位）
+static uint32_t (*real_image_count)(void);
+static const char *(*real_image_name)(uint32_t);
+static const struct mach_header *(*real_image_header)(uint32_t);
+
+static void ResolveRealDyldFns(void) {
+    static dispatch_once_t ronce;
+    dispatch_once(&ronce, ^{
+        real_image_count  = (uint32_t (*)(void))dlsym(RTLD_DEFAULT, "_dyld_image_count");
+        real_image_name   = (const char *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_name");
+        real_image_header = (const struct mach_header *(*)(uint32_t))dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
+    });
+}
+
 static void ScanHiddenImages(void) {
+    ResolveRealDyldFns();
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         gHiddenIdx = [NSMutableArray array];
-        uint32_t n = _dyld_image_count();
+        if (!real_image_count || !real_image_name) return;
+        uint32_t n = real_image_count();
         for (uint32_t i = 0; i < n; i++) {
-            const char *name = _dyld_get_image_name(i);
+            const char *name = real_image_name(i);
             if (!name) continue;
             NSString *ns = [@(name) lastPathComponent];
             for (NSString *h in HiddenDylibNames()) {
@@ -162,8 +181,11 @@ static long MapVisibleIndex(uint32_t idx) {
 
 // 可见下标 -> 原始下标
 static long MapRealIndex(long visibleIdx) {
+    ResolveRealDyldFns();
+    if (!real_image_count) return -1;
     long seen = -1;
-    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+    uint32_t n = real_image_count();
+    for (uint32_t i = 0; i < n; i++) {
         if (IsHiddenIndex(i)) continue;
         seen++;
         if (seen == visibleIdx) return (long)i;
@@ -171,62 +193,58 @@ static long MapRealIndex(long visibleIdx) {
     return -1;
 }
 
-static uint32_t hook__dyld_image_count(void) {
+// ============================================================
+// A/B/C 全部用 Logos %hookf（自动管理 orig，避免递归）
+// ============================================================
+
+%hookf(uint32_t, _dyld_image_count) {
     ScanHiddenImages();
-    uint32_t n = _dyld_image_count();
+    uint32_t n = %orig;
     return (uint32_t)(n - gHiddenCount);
 }
 
-static const char *hook__dyld_get_image_name(uint32_t idx) {
+%hookf(const char *, _dyld_get_image_name, uint32_t idx) {
     ScanHiddenImages();
-    long real = MapRealIndex((long)idx);
+    long real = MapRealIndex(idx);
     if (real < 0) return NULL;
-    return _dyld_get_image_name((uint32_t)real);
+    return %orig((uint32_t)real);
 }
 
-static const mach_header *hook__dyld_get_image_header(uint32_t idx) {
+%hookf(const struct mach_header *, _dyld_get_image_header, uint32_t idx) {
     ScanHiddenImages();
-    long real = MapRealIndex((long)idx);
+    long real = MapRealIndex(idx);
     if (real < 0) return NULL;
-    return _dyld_get_image_header((uint32_t)real);
+    return %orig((uint32_t)real);
 }
 
-// ============================================================
-// B. 越狱痕迹抹除：路径黑名单
-// ============================================================
-
-static int hook_stat(const char *restrict path, struct stat *restrict buf) {
+%hookf(int, stat, const char *restrict path, struct stat *restrict buf) {
     if (IsJBPath(path)) { errno = ENOENT; return -1; }
-    return stat(path, buf);
+    return %orig;
 }
 
-static int hook_lstat(const char *restrict path, struct stat *restrict buf) {
+%hookf(int, lstat, const char *restrict path, struct stat *restrict buf) {
     if (IsJBPath(path)) { errno = ENOENT; return -1; }
-    return lstat(path, buf);
+    return %orig;
 }
 
-static int hook_access(const char *path, int mode) {
+%hookf(int, access, const char *path, int mode) {
     if (IsJBPath(path)) { errno = ENOENT; return -1; }
-    return access(path, mode);
+    return %orig;
 }
 
-static FILE *hook_fopen(const char *path, const char *mode) {
+%hookf(FILE *, fopen, const char *path, const char *mode) {
     if (IsJBPath(path)) { errno = ENOENT; return NULL; }
-    return fopen(path, mode);
+    return %orig;
 }
 
-// ============================================================
-// C. 反调试
-// ============================================================
-
-static int hook_ptrace(int request, pid_t pid, caddr_t addr, int data) {
+%hookf(int, ptrace, int request, pid_t pid, caddr_t addr, int data) {
     if (request == 31 /* PT_DENY_ATTACH */) return 0; // 吞掉游戏侧反调试
-    return ptrace(request, pid, addr, data);
+    return %orig;
 }
 
-static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
-                       void *newp, size_t newlen) {
-    int ret = sysctl(name, namelen, oldp, oldlenp, newp, newlen);
+%hookf(int, sysctl, int *name, u_int namelen, void *oldp, size_t *oldlenp,
+       void *newp, size_t newlen) {
+    int ret = %orig;
     if (ret == 0 && namelen == 4 && name[0] == CTL_KERN && name[1] == KERN_PROC) {
         // 清除 P_TRACED 标志（kinfo_proc.kp_proc.p_flag）
         if (oldp && oldlenp && *oldlenp >= sizeof(struct kinfo_proc)) {
@@ -318,22 +336,12 @@ static int hook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
 %end
 
 // ============================================================
-// Constructor：C 函数 hook 安装 + 镜像隐藏初始化
+// Constructor：镜像隐藏初始化（%hookf 的 hook 由 Logos 自动安装）
 // ============================================================
 
 %ctor {
     @autoreleasepool {
+        ResolveRealDyldFns();
         ScanHiddenImages();
-
-        // MSHookFunction 安装 C 层 hook（Theos 自带 libsubstrate）
-        MSHookFunction((void *)_dyld_image_count,     (void *)hook__dyld_image_count,     NULL);
-        MSHookFunction((void *)_dyld_get_image_name,  (void *)hook__dyld_get_image_name,  NULL);
-        MSHookFunction((void *)_dyld_get_image_header,(void *)hook__dyld_get_image_header,NULL);
-        MSHookFunction((void *)stat,   (void *)hook_stat,   NULL);
-        MSHookFunction((void *)lstat,  (void *)hook_lstat,  NULL);
-        MSHookFunction((void *)access, (void *)hook_access, NULL);
-        MSHookFunction((void *)fopen,  (void *)hook_fopen,  NULL);
-        MSHookFunction((void *)ptrace, (void *)hook_ptrace, NULL);
-        MSHookFunction((void *)sysctl, (void *)hook_sysctl, NULL);
     }
 }
