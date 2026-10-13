@@ -177,16 +177,6 @@ static BOOL IsHiddenIndex(uint32_t idx) {
     return NO;
 }
 
-// 原始下标 -> 过滤后下标（返回 -1 表示该下标被隐藏）
-static long MapVisibleIndex(uint32_t idx) {
-    long visible = -1;
-    for (uint32_t i = 0; i <= idx; i++) {
-        if (IsHiddenIndex(i)) continue;
-        visible++;
-    }
-    return visible;
-}
-
 // 可见下标 -> 原始下标
 static long MapRealIndex(long visibleIdx) {
     ResolveRealDyldFns();
