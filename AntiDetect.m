@@ -122,24 +122,59 @@ static void SwizzleInstance(Class c, SEL sel, IMP newImp, IMP *origOut) {
     method_setImplementation(m, newImp);
 }
 
+// 读取 Documents/antidetect_flags.txt 决定启用哪些 hook（每行一个词，# 开头为注释）：
+//   data     —— E 层 NSData 假响应
+//   present  —— F 层 present 压制
+//   openurl  —— F 层 openURL 压制
+// 文件不存在 = 全关（空壳，纯注入验证）
+static NSSet<NSString *> *LoadFlags(void) {
+    NSString *path = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES)
+                      firstObject];
+    path = [path stringByAppendingPathComponent:@"antidetect_flags.txt"];
+    NSString *text = [NSString stringWithContentsOfFile:path
+                                               encoding:NSUTF8StringEncoding
+                                                  error:NULL];
+    NSMutableSet *flags = [NSMutableSet set];
+    for (NSString *line in [text componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]]) {
+        NSString *t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (t.length && ![t hasPrefix:@"#"]) [flags addObject:t];
+    }
+    // 把启用清单写回日志文件，方便确认
+    NSString *log = [NSString stringWithFormat:@"AntiDetect init flags=%@\n",
+                     flags.allObjects ?: @"(none)"];
+    NSString *logPath = [path stringByDeletingLastPathComponent];
+    logPath = [logPath stringByAppendingPathComponent:@"antidetect.log"];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:logPath];
+    if (!fh) { [log writeToFile:logPath atomically:YES]; }
+    else { [fh seekToEndOfFile]; [fh writeData:[log dataUsingEncoding:NSUTF8StringEncoding]]; [fh closeFile]; }
+    return flags;
+}
+
 __attribute__((constructor))
 static void AntiDetectInit(void) {
     @autoreleasepool {
-        Class dataCls = [NSData class];
-        SwizzleClass(dataCls, @selector(dataWithContentsOfURL:),
-                     (IMP)new_dataWithContentsOfURL, (IMP *)&orig_dataWithContentsOfURL);
-        SwizzleClass(dataCls, @selector(dataWithContentsOfURL:options:error:),
-                     (IMP)new_dataWithContentsOfURL_opt, (IMP *)&orig_dataWithContentsOfURL_opt);
+        NSSet<NSString *> *flags = LoadFlags();
 
-        SwizzleInstance([UIViewController class],
-                        @selector(presentViewController:animated:completion:),
-                        (IMP)new_presentVC, (IMP *)&orig_presentVC);
+        if ([flags containsObject:@"data"]) {
+            Class dataCls = [NSData class];
+            SwizzleClass(dataCls, @selector(dataWithContentsOfURL:),
+                         (IMP)new_dataWithContentsOfURL, (IMP *)&orig_dataWithContentsOfURL);
+            SwizzleClass(dataCls, @selector(dataWithContentsOfURL:options:error:),
+                         (IMP)new_dataWithContentsOfURL_opt, (IMP *)&orig_dataWithContentsOfURL_opt);
+        }
 
-        Class appCls = objc_getClass("UIApplication");
-        SwizzleInstance(appCls, @selector(openURL:),
-                        (IMP)new_openURL, (IMP *)&orig_openURL);
-        SwizzleInstance(appCls, @selector(openURL:options:completionHandler:),
-                        (IMP)new_openURL_opt, (IMP *)&orig_openURL_opt);
+        if ([flags containsObject:@"present"]) {
+            SwizzleInstance([UIViewController class],
+                            @selector(presentViewController:animated:completion:),
+                            (IMP)new_presentVC, (IMP *)&orig_presentVC);
+        }
 
+        if ([flags containsObject:@"openurl"]) {
+            Class appCls = objc_getClass("UIApplication");
+            SwizzleInstance(appCls, @selector(openURL:),
+                            (IMP)new_openURL, (IMP *)&orig_openURL);
+            SwizzleInstance(appCls, @selector(openURL:options:completionHandler:),
+                            (IMP)new_openURL_opt, (IMP *)&orig_openURL_opt);
+        }
     }
 }
