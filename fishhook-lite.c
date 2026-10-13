@@ -24,23 +24,55 @@ static uint64_t read_uleb(const uint8_t **pp, const uint8_t *end) {
     return result;
 }
 
-// ---- bind opcode 常量 ----
+// ---- bind opcode 常量（SDK mach-o/bind.h 已有大部分，做缺省防护）----
+#ifndef BIND_OPCODE_MASK
 #define BIND_OPCODE_MASK                         0xF0
+#endif
+#ifndef BIND_IMMEDIATE_MASK
 #define BIND_IMMEDIATE_MASK                      0x0F
+#endif
+#ifndef BIND_OPCODE_DONE
 #define BIND_OPCODE_DONE                         0x00
+#endif
+#ifndef BIND_OPCODE_SET_DYLIB_ORDINAL_IMM
 #define BIND_OPCODE_SET_DYLIB_ORDINAL_IMM        0x10
+#endif
+#ifndef BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB
 #define BIND_OPCODE_SET_DYLIB_ORDINAL_ULEB       0x20
+#endif
+#ifndef BIND_OPCODE_SET_DYLIB_SPECIAL_IMM
 #define BIND_OPCODE_SET_DYLIB_SPECIAL_IMM        0x30
+#endif
+#ifndef BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM
 #define BIND_OPCODE_SET_SYMBOL_TRAILING_FLAGS_IMM 0x40
+#endif
+#ifndef BIND_OPCODE_SET_TYPE_IMM
 #define BIND_OPCODE_SET_TYPE_IMM                 0x50
+#endif
+#ifndef BIND_OPCODE_SET_ADDEND_SLEB
 #define BIND_OPCODE_SET_ADDEND_SLEB              0x60
+#endif
+#ifndef BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB
 #define BIND_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB  0x70
+#endif
+#ifndef BIND_OPCODE_ADD_ADDR_ULEB
 #define BIND_OPCODE_ADD_ADDR_ULEB                0x80
+#endif
+#ifndef BIND_OPCODE_DO_BIND
 #define BIND_OPCODE_DO_BIND                      0x90
+#endif
+#ifndef BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB
 #define BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB 0xA0
+#endif
+#ifndef BIND_OPCODE_THREADED
 #define BIND_OPCODE_THREADED                     0xB0
+#endif
+#ifndef BIND_SUBOPCODE_THREADED_SET_BIND_ORDINAL_TABLE_SIZE_ULEB
 #define BIND_SUBOPCODE_THREADED_SET_BIND_ORDINAL_TABLE_SIZE_ULEB 0x00
+#endif
+#ifndef BIND_SUBOPCODE_THREADED_APPLY
 #define BIND_SUBOPCODE_THREADED_APPLY            0x01
+#endif
 
 static int g_done = 0;
 
