@@ -46,7 +46,6 @@ typedef int (*gcm_decrypt_fn)(unsigned int, unsigned int,
 
 static gcm_decrypt_fn orig_gcm_decrypt;
 static int g_replaced;               // 只替换一次
-static int64_t g_jzBase;
 
 static int my_gcm_decrypt(unsigned int alg, unsigned int options,
                           const void *key, size_t keyLen,
