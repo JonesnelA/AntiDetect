@@ -14,7 +14,6 @@
 
 static const uint64_t kFlagUnlock  = 0x13e9080;   // stlr w8=1（验证成功标志）
 static const uint64_t kFlagUnlock2 = 0x13e9084;   // 配套标志
-static const uint64_t kMenuExpire  = 0x13e9038;   // 0x13e9000 区状态块
 
 static int64_t JnZ1HubLoadAddr(void) {
     uint32_t n = _dyld_image_count();
