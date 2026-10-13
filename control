@@ -1,0 +1,7 @@
+Package: com.juzi.antidetect
+Name: AntiDetect
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Pure anti-detection layer for balls (no game features). Derived from JnZ1Hub reverse engineering: dylib hiding, JB path masking, anti-debug, Reachability override, fake-response framework, profile-alert suppression.
+Author: juzi
+Section: Tweaks

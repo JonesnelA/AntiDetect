@@ -1,0 +1,47 @@
+name: Build AntiDetect
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Theos
+        uses: actions/cache@v4
+        with:
+          path: theos
+          key: theos-latest
+
+      - name: Setup Theos
+        run: |
+          git clone --depth=1 https://github.com/theos/theos.git theos
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
+          # SDK（除非你已有私有 SDK 缓存，否则用默认 iPhoneOS SDK）
+          curl -sL https://github.com/theos/sdks/archive/master.tar.gz | tar -xz -C theos/sdks --strip-components=1
+
+      - name: Build
+        run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
+          make FINALPACKAGE=1
+          echo "---- artifacts ----"
+          find .theos -name '*.dylib' | head
+
+      - name: Extract raw dylib
+        run: |
+          mkdir -p out
+          # Theos 产物 .theos/obj/AntiDetect.dylib 即注入用 dylib
+          cp .theos/obj/AntiDetect.dylib out/AntiDetect.dylib 2>/dev/null || \
+          find .theos -name 'AntiDetect.dylib' -exec cp {} out/ \;
+          ls -la out/
+
+      - name: Upload dylib
+        uses: actions/upload-artifact@v4
+        with:
+          name: AntiDetect.dylib
+          path: out/AntiDetect.dylib
