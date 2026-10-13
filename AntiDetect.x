@@ -16,7 +16,6 @@
 #import <UIKit/UIKit.h>
 #import <sys/stat.h>
 #import <sys/sysctl.h>
-#import <sys/ptrace.h>
 #import <sys/proc.h>
 #import <sys/errno.h>
 #import <dlfcn.h>
@@ -24,6 +23,15 @@
 #import <mach-o/loader.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+
+// Apple SDK 无 sys/ptrace.h，手动声明
+#ifndef PT_DENY_ATTACH
+#define PT_DENY_ATTACH 31
+#endif
+#ifndef P_TRACED
+#define P_TRACED 0x00000800
+#endif
+extern int ptrace(int _request, pid_t _pid, caddr_t _addr, int _data);
 
 // ============================================================
 // 配置区
